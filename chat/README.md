@@ -1,1 +1,1 @@
-# MultiUser chat application
+# Multiuser chat application
