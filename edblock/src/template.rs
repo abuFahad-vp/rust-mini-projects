@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 pub struct MenuBuilder {
     header: String,
-    menus: HashMap<i32, (&'static str, Box<dyn Fn() -> bool>)>
+    menus: HashMap<&'static str, (&'static str, Box<dyn Fn() -> bool>)>
 }
 
 impl MenuBuilder {
@@ -11,11 +11,12 @@ impl MenuBuilder {
         MenuBuilder{menus: HashMap::new(), header: "".to_string()}
     }
 
+    // calling set_header function override the key :show if exists
     pub fn set_header(&mut self, header: String) {
         self.header = header;
     }
 
-    pub fn add<F>(&mut self, key: i32, desc: &'static str, fx: F)
+    pub fn add<F>(&mut self, key: &'static str, desc: &'static str, fx: F)
     where 
         F: Fn() -> bool + 'static
     {
@@ -31,21 +32,19 @@ impl MenuBuilder {
             }
             println!("");
 
-            let mut choice_raw = String::new();
-            std::io::stdout().flush().expect("Failed to flush the output");
-            std::io::stdin().read_line(&mut choice_raw).expect("Failed to read from stdin: INTERNAL ERROR");
-            if let Ok(choice) = choice_raw.trim().parse::<i32>() {
-                match self.menus.get(&choice) {
-                    Some((_,fx)) => {
-                        if !fx(){
-                            break;
-                        }
+            let mut choice = String::new();
+            std::io::stdout().flush().expect("Failed to flush the output: INTERNAL ERROR");
+            std::io::stdin().read_line(&mut choice).expect("Failed to read from stdin: INTERNAL ERROR");
+            match self.menus.get(choice.trim()) {
+                Some((_,fx)) => {
+                    if !fx(){
+                        break;
                     }
-                    None => println!("Invalid option")
                 }
-            } else {
-                println!("Invalid option")
+                None => println!("Invalid option")
             }
+            // print!("\x1B[2J\x1B[1;1H"); // clear the screen
+            // std::io::stdout().flush().expect("Failed to flush the stdout: INTERNAL ERROR");
         }
     }
 }
