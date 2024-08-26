@@ -2,7 +2,11 @@ use std::io;
 use std::io::Write;
 use std::cell::RefCell;
 use std::rc::Rc;
-use crate::blockchain::blockchain_core::Chain;
+use std::sync::Mutex;
+use std::sync::Arc;
+use rocksdb::{Options, DB};
+
+use crate::blockchain::blockchain_core_new::Chain;
 use crate::template;
 
 pub fn blockchain_ui_page() {
@@ -24,8 +28,13 @@ pub fn blockchain_ui_page() {
         .parse::<u32>()
         .expect("we need an integer");
 
+    
+    let db_path = "amanah.db";
+    let mut db_opts = Options::default();
+    db_opts.create_if_missing(true);
+    let db = Arc::new(Mutex::new(DB::open(&db_opts, db_path).unwrap()));
     let chain = Rc::new(RefCell::new(
-        Chain::new(miner_addr.trim().to_string(), diff)
+        Chain::new(miner_addr.trim().to_string(), diff, db)
     ));
 
     let mut blockchain_page = template::MenuBuilder::new();
