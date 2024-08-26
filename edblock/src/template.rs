@@ -34,6 +34,8 @@ impl MenuBuilder {
 
             let mut choice = String::new();
             std::io::stdout().flush().expect("Failed to flush the output: INTERNAL ERROR");
+            print!("input: "); // clear the screen
+            std::io::stdout().flush().expect("Failed to flush the stdout: INTERNAL ERROR");
             std::io::stdin().read_line(&mut choice).expect("Failed to read from stdin: INTERNAL ERROR");
             match self.menus.get(choice.trim()) {
                 Some((_,fx)) => {

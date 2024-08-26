@@ -78,9 +78,28 @@ pub fn blockchain_app() {
         }
     });
 
-    blockchain_page.add("6", "Show height", move || {
-        println!("height: {}",chain.borrow().get_height());
-        true
+    blockchain_page.add("6", "Show height", {
+        let chain = Rc::clone(&chain);
+        move || {
+            println!("height: {}",chain.borrow().get_height());
+            true
+        }
+    });
+
+    blockchain_page.add("7", "Show hash by index", {
+        let chain = Rc::clone(&chain);
+        move || {
+            print!("input index: ");
+            std::io::stdout().flush().expect("Failed to flush the stdout");
+            let mut choice = String::new();
+            std::io::stdin().read_line(&mut choice).expect("Failed to read the index");
+            if let Ok(choice) = choice.trim().parse::<u32>() {
+                println!("hash of index {}: {:?}",choice, chain.borrow().get_hash_by_index(choice));
+            }else {
+                println!("Invalid input");
+            }
+            true
+        }
     });
 
     blockchain_page.run_menu();

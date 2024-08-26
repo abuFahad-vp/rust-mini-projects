@@ -91,7 +91,7 @@ impl Chain {
         if self.height == 0 {
             return Ok(String::from_utf8(vec![48; 64]).unwrap());
         }
-        self.get_hash_by_index(self.height - 1)
+        Ok(Chain::hash(&self.get_block_by_index(self.height-1).unwrap().header))
     }
 
     pub fn get_block_by_index(&self, index: u32) -> Result<Block, &str> {
@@ -178,21 +178,18 @@ impl Chain {
         let block_hash = Chain::hash(&header);
 
         let db = self.db.lock().expect("Failed to lock the db. deadlock occurs");
-        if let Ok(_) = db.put(block_hash.as_bytes(), serde_json::to_string(&block).unwrap().as_bytes()) {
-            if let Ok(_) = db.put(self.height.to_be_bytes(), block_hash.as_bytes()) {
-                if let Ok(_) = db.put("height", (self.height + 1).to_be_bytes()) {
-                    self.height += 1;
-                    db.flush().expect("Failed to add the data to the db");
-                    return true;
-                }else {
-                    return false;
-                }
-            } else {
-                return false;
-            }
-        } else {
+        if db.put(block_hash.as_bytes(), serde_json::to_string(&block).unwrap().as_bytes()).is_err() {
             return false;
         }
+        if db.put(self.height.to_be_bytes(), block_hash.as_bytes()).is_err() {
+            return false;
+        }
+        if db.put("height", (self.height + 1).to_be_bytes()).is_err() {
+            return false;
+        }
+        self.height += 1;
+        db.flush().expect("Failed to add the data to the db");
+        true
     }
 
     fn get_merkle(curr_trans: Vec<Transaction>) -> String {
