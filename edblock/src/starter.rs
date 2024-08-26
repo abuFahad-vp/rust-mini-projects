@@ -15,7 +15,7 @@ pub fn starter_page(args: Args) {
     let mut start_page = template::MenuBuilder::new();
     start_page.set_header(header);
     start_page.add("1", "Go Online", || {
-        blockchain::blockchain_ui::blockchain_ui_page();
+        blockchain::blockchain_app::blockchain_app();
         true
     });
 

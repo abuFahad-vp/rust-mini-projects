@@ -6,14 +6,12 @@ use std::sync::Mutex;
 use std::sync::Arc;
 use rocksdb::{Options, DB};
 
-use crate::blockchain::blockchain_core_new::Chain;
+use crate::blockchain::blockchain_core::Chain;
 use crate::template;
 
-pub fn blockchain_ui_page() {
+pub fn blockchain_app() {
     let mut miner_addr = String::new();
     let mut difficulty = String::new();
-
-    println!("Generating a genesis block...");
 
     print!("Input miner address: ");
     io::stdout().flush().expect("Failed to flush the stdout.");
@@ -27,7 +25,6 @@ pub fn blockchain_ui_page() {
         .trim()
         .parse::<u32>()
         .expect("we need an integer");
-
     
     let db_path = "amanah.db";
     let mut db_opts = Options::default();
@@ -39,6 +36,11 @@ pub fn blockchain_ui_page() {
 
     let mut blockchain_page = template::MenuBuilder::new();
     blockchain_page.set_header("MENU".to_string());
+
+    blockchain_page.add("0", "Exit", || {
+        false
+    });
+
     blockchain_page.add("1", "New Transaction", {
         let chain = Rc::clone(&chain);
         move || {
@@ -76,8 +78,9 @@ pub fn blockchain_ui_page() {
         }
     });
 
-    blockchain_page.add("0", "Exit", || {
-        false
+    blockchain_page.add("6", "Show height", move || {
+        println!("height: {}",chain.borrow().get_height());
+        true
     });
 
     blockchain_page.run_menu();

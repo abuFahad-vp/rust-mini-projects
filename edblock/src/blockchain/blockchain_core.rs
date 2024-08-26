@@ -1,17 +1,19 @@
-use serde_derive::Serialize;
+use serde_derive::{Serialize, Deserialize};
 use sha2::{Digest, Sha256};
-use std::fmt::Write;
+use core::str;
+use std::{fmt::Write, sync::{Arc, Mutex}};
+use rocksdb::DB;
 
 use chrono::prelude::*;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Transaction {
     sender: String,
     receiver: String,
     amount: f32,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone, Deserialize)]
 pub struct Blockheader {
     timestamp: i64,
     nonce: u32,
@@ -20,7 +22,7 @@ pub struct Blockheader {
     difficulty: u32,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone, Deserialize)]
 pub struct Block {
     header: Blockheader,
     count: u32,
@@ -28,31 +30,50 @@ pub struct Block {
 }
 
 pub struct Chain {
-    chain: Vec<Block>,
+    db: Arc<Mutex<DB>>,
+    height: u32,
     curr_trans: Vec<Transaction>,
     difficulty: u32,
     miner_addr: String,
     reward: f32,
 }
 
+// can only create one instances of the struct
 impl Chain {
-    pub fn new(miner_addr: String, difficulty: u32) -> Chain {
+    pub fn new(miner_addr: String, difficulty: u32, db: Arc<Mutex<DB>>) -> Chain {
         let mut chain = Chain {
-            chain: Vec::new(),
+            db: Arc::clone(&db),
+            height: 0,
             curr_trans: Vec::new(),
             difficulty,
             miner_addr,
             reward: 100.0,
         };
-
-        chain.generate_new_block();
+        let height = chain.get_height();
+        if height == 0 {
+            chain.generate_new_block();
+        }else {
+            chain.height = height;
+        }
         chain
     }
 
+    pub fn get_height(&self) -> u32 {
+        let db = self.db.lock().expect("Failed to lock.deadlock occured");
+        match db.get("height") { // do not convert to bytes
+            Ok(Some(height)) => {
+                let digits: [u8; 4] = height.try_into().unwrap();
+                u32::from_be_bytes(digits)
+            },
+            _ => 0
+        }
+    }
+
     pub fn reveal_chain(&self) {
-        for blocks in &self.chain {
-            println!("Block hash: {}", Chain::hash(&blocks.header));
-            println!("{:#?}", blocks);
+        for i in 0..self.height {
+            let block = self.get_block_by_index(i).unwrap();
+            println!("Block hash: {}",Chain::hash(&block.header));
+            println!("{:#?}", block)
         }
     }
 
@@ -66,12 +87,48 @@ impl Chain {
         true
     }
 
-    pub fn last_hash(&self) -> String {
-        let block = match self.chain.last() {
-            Some(block) => block,
-            None => return String::from_utf8(vec![48; 64]).unwrap(),
-        };
-        Chain::hash(&block.header)
+    pub fn last_hash(&self) -> Result<String, &str> {
+        if self.height == 0 {
+            return Ok(String::from_utf8(vec![48; 64]).unwrap());
+        }
+        self.get_hash_by_index(self.height - 1)
+    }
+
+    pub fn get_block_by_index(&self, index: u32) -> Result<Block, &str> {
+        if let Ok(hash) = self.get_hash_by_index(index) {
+            match self.get_block_by_hash(hash) {
+                Ok(block) => Ok(block),
+                Err(_) => Err("Block not found"),
+            }
+        } else {
+            Err("Block not found")
+        }
+    }
+
+    pub fn get_hash_by_index(&self, index: u32) -> Result<String, &str>{
+        let db = self.db.lock().expect("Failed to lock.deadlock occured");
+        match db.get(index.to_be_bytes()) {
+            Ok(Some(hash)) => {
+                Ok(String::from_utf8(hash).unwrap())
+            },
+            Ok(None) => {
+                Err("Block not found")
+            },
+            Err(_) => Err("operational error occured")
+        }
+    }
+
+    pub fn get_block_by_hash(&self, hash: String) -> Result<Block, &'static str> {
+        let db = self.db.lock().expect("Failed to lock.deadlock occured");
+        match db.get(hash.as_bytes()) {
+            Ok(Some(block)) => {
+                Ok(serde_json::from_str(str::from_utf8(&block).unwrap()).unwrap())
+            },
+            Ok(None) => {
+                Err("Block not found")
+            },
+            Err(_) => Err("operational error occured")
+        }
     }
 
     pub fn update_difficulty(&mut self, difficulty: u32) -> bool {
@@ -85,7 +142,7 @@ impl Chain {
     }
 
     pub fn generate_new_block(&mut self) -> bool {
-        if !self.chain.is_empty() && self.curr_trans.is_empty() {
+        if !(self.height == 0) && self.curr_trans.is_empty() {
             println!("No transaction to add!!");
             return false;
         }
@@ -93,7 +150,7 @@ impl Chain {
         let header = Blockheader {
             timestamp: Utc::now().timestamp_millis(),
             nonce: 0,
-            pre_hash: self.last_hash(),
+            pre_hash: self.last_hash().unwrap(),
             merkle: String::new(),
             difficulty: self.difficulty,
         };
@@ -105,7 +162,7 @@ impl Chain {
         };
 
         let mut block = Block {
-            header,
+            header: header.clone(),
             count: 0,
             transactions: vec![],
         };
@@ -117,8 +174,25 @@ impl Chain {
         Chain::proof_of_work(&mut block.header);
 
         println!("{:#?}", &block);
-        self.chain.push(block);
-        true
+
+        let block_hash = Chain::hash(&header);
+
+        let db = self.db.lock().expect("Failed to lock the db. deadlock occurs");
+        if let Ok(_) = db.put(block_hash.as_bytes(), serde_json::to_string(&block).unwrap().as_bytes()) {
+            if let Ok(_) = db.put(self.height.to_be_bytes(), block_hash.as_bytes()) {
+                if let Ok(_) = db.put("height", (self.height + 1).to_be_bytes()) {
+                    self.height += 1;
+                    db.flush().expect("Failed to add the data to the db");
+                    return true;
+                }else {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        } else {
+            return false;
+        }
     }
 
     fn get_merkle(curr_trans: Vec<Transaction>) -> String {
