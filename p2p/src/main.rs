@@ -34,7 +34,6 @@ fn client_reader(peers: Vec<String>) {
                         stream = Some(s)
                     }
                     Err(_) => {
-                        println!("Retrying....");
                         thread::sleep(time::Duration::from_millis(200));
                     }
                 };
