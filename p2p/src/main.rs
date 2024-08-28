@@ -3,21 +3,27 @@ use std::net::{TcpListener, TcpStream};
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use clap::Parser;
+
+#[derive(Parser, Debug)]
+struct Args {
+    #[arg(short, long, default_value_t = 8000, help = "port for running the node")]
+    port: u32,
+    peers: Vec<String>,
+}
 
 const SIZE: usize = 50;
 
-const PEERS: &[&str]  = &["127.0.0.1:8000", "127.0.0.1:8001", "127.0.0.1:8002"];
-
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
+    let args = Args::parse();
     thread::spawn(|| {
-        client_reader();
+        client_reader(args.peers);
     });
-    server(args[1].clone());
+    server(args.port);
 }
 
-fn client_reader() {
-    for addr in PEERS {
+fn client_reader(peers: Vec<String>) {
+    for addr in peers {
         thread::spawn(move || {
             println!("Connecting to {addr}");
             let mut stream :Option<TcpStream> = None;
@@ -48,8 +54,8 @@ fn client_reader() {
     }
 }
 
-fn server(port: String) {
-    let listener = TcpListener::bind("127.0.0.1:".to_owned() + &port).unwrap();
+fn server(port: u32) {
+    let listener = TcpListener::bind(format!("127.0.0.1:{}",port)).unwrap();
     println!("Server is listening on port {}...",port);
 
     let clients = Arc::new(Mutex::new(Vec::<TcpStream>::new()));
