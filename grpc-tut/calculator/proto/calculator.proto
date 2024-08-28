@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package calculator;
+
+service Calculator {
+    rpc Add (CalculationRequest) returns (CalculationResponse);
+    rpc Divide (CalculationRequest) returns (CalculationResponse);
+}
+
+service Admin {
+    rpc GetRequestCount (GetCountRequest) returns (CountResponse);
+}
+
+message CalculationRequest {
+    int64 a = 1;
+    int64 b = 2;
+}
+
+message CalculationResponse {int64 result = 1;}
+
+message GetCountRequest {}
+message CountResponse {
+    uint64 count = 1;
+}

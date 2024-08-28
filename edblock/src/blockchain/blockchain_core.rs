@@ -1,7 +1,7 @@
 use serde_derive::{Serialize, Deserialize};
 use sha2::{Digest, Sha256};
 use core::str;
-use std::{fmt::Write, sync::{Arc, Mutex}};
+use std::fmt::Write;
 use rocksdb::DB;
 
 use chrono::prelude::*;
@@ -30,7 +30,7 @@ pub struct Block {
 }
 
 pub struct Chain {
-    db: Arc<Mutex<DB>>,
+    db: DB,
     height: u32,
     curr_trans: Vec<Transaction>,
     difficulty: u32,
@@ -40,9 +40,9 @@ pub struct Chain {
 
 // can only create one instances of the struct
 impl Chain {
-    pub fn new(miner_addr: String, difficulty: u32, db: Arc<Mutex<DB>>) -> Chain {
+    pub fn new(miner_addr: String, difficulty: u32, db: DB) -> Chain {
         let mut chain = Chain {
-            db: Arc::clone(&db),
+            db,
             height: 0,
             curr_trans: Vec::new(),
             difficulty,
@@ -59,8 +59,7 @@ impl Chain {
     }
 
     pub fn get_height(&self) -> u32 {
-        let db = self.db.lock().expect("Failed to lock.deadlock occured");
-        match db.get("height") { // do not convert to bytes
+        match self.db.get("height") { // do not convert to bytes
             Ok(Some(height)) => {
                 let digits: [u8; 4] = height.try_into().unwrap();
                 u32::from_be_bytes(digits)
@@ -91,7 +90,11 @@ impl Chain {
         if self.height == 0 {
             return Ok(String::from_utf8(vec![48; 64]).unwrap());
         }
-        Ok(Chain::hash(&self.get_block_by_index(self.height-1).unwrap().header))
+        if let Ok(hash) = self.get_hash_by_index(self.height - 1) {
+            Ok(hash)
+        } else {
+            Err("Hash not found for current index")
+        }
     }
 
     pub fn get_block_by_index(&self, index: u32) -> Result<Block, &str> {
@@ -106,8 +109,7 @@ impl Chain {
     }
 
     pub fn get_hash_by_index(&self, index: u32) -> Result<String, &str>{
-        let db = self.db.lock().expect("Failed to lock.deadlock occured");
-        match db.get(index.to_be_bytes()) {
+        match self.db.get(index.to_be_bytes()) {
             Ok(Some(hash)) => {
                 Ok(String::from_utf8(hash).unwrap())
             },
@@ -119,8 +121,7 @@ impl Chain {
     }
 
     pub fn get_block_by_hash(&self, hash: String) -> Result<Block, &'static str> {
-        let db = self.db.lock().expect("Failed to lock.deadlock occured");
-        match db.get(hash.as_bytes()) {
+        match self.db.get(hash.as_bytes()) {
             Ok(Some(block)) => {
                 Ok(serde_json::from_str(str::from_utf8(&block).unwrap()).unwrap())
             },
@@ -175,20 +176,21 @@ impl Chain {
 
         println!("{:#?}", &block);
 
-        let block_hash = Chain::hash(&header);
+        let block_hash = Chain::hash(&block.header);
 
-        let db = self.db.lock().expect("Failed to lock the db. deadlock occurs");
-        if db.put(block_hash.as_bytes(), serde_json::to_string(&block).unwrap().as_bytes()).is_err() {
+        if self.db.put(block_hash.as_bytes(), serde_json::to_string(&block).unwrap().as_bytes()).is_err() {
             return false;
         }
-        if db.put(self.height.to_be_bytes(), block_hash.as_bytes()).is_err() {
+
+        if self.db.put(self.height.to_be_bytes(), block_hash.as_bytes()).is_err() {
             return false;
         }
-        if db.put("height", (self.height + 1).to_be_bytes()).is_err() {
+        
+        if self.db.put("height", (self.height + 1).to_be_bytes()).is_err() {
             return false;
         }
         self.height += 1;
-        db.flush().expect("Failed to add the data to the db");
+        self.db.flush().expect("Failed to add the data to the db");
         true
     }
 

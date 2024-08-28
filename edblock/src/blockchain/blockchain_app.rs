@@ -2,8 +2,6 @@ use std::io;
 use std::io::Write;
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Mutex;
-use std::sync::Arc;
 use rocksdb::{Options, DB};
 
 use crate::blockchain::blockchain_core::Chain;
@@ -29,7 +27,7 @@ pub fn blockchain_app() {
     let db_path = "amanah.db";
     let mut db_opts = Options::default();
     db_opts.create_if_missing(true);
-    let db = Arc::new(Mutex::new(DB::open(&db_opts, db_path).unwrap()));
+    let db = DB::open(&db_opts, db_path).unwrap();
     let chain = Rc::new(RefCell::new(
         Chain::new(miner_addr.trim().to_string(), diff, db)
     ));
@@ -89,20 +87,24 @@ pub fn blockchain_app() {
     blockchain_page.add("7", "Show hash by index", {
         let chain = Rc::clone(&chain);
         move || {
-            print!("input index: ");
-            std::io::stdout().flush().expect("Failed to flush the stdout");
-            let mut choice = String::new();
-            std::io::stdin().read_line(&mut choice).expect("Failed to read the index");
-            if let Ok(choice) = choice.trim().parse::<u32>() {
-                println!("hash of index {}: {:?}",choice, chain.borrow().get_hash_by_index(choice));
-            }else {
-                println!("Invalid input");
-            }
+            show_hash_by_index(chain.clone());
             true
         }
     });
 
     blockchain_page.run_menu();
+}
+
+fn show_hash_by_index(chain: Rc<RefCell<Chain>>) {
+    print!("input index: ");
+    std::io::stdout().flush().expect("Failed to flush the stdout");
+    let mut choice = String::new();
+    std::io::stdin().read_line(&mut choice).expect("Failed to read the index");
+    if let Ok(choice) = choice.trim().parse::<u32>() {
+        println!("hash of index {}: {:?}",choice, chain.borrow().get_hash_by_index(choice));
+    } else {
+        println!("Invalid input");
+    }
 }
 
 fn new_transaction(chain: Rc<RefCell<Chain>>) {
