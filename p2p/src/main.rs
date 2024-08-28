@@ -9,6 +9,8 @@ use clap::Parser;
 struct Args {
     #[arg(short, long, default_value_t = 8000, help = "port for running the node")]
     port: u32,
+
+    #[arg(help = "list of peers to connect to")]
     peers: Vec<String>,
 }
 
