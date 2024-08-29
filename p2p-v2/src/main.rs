@@ -1,16 +1,32 @@
 mod peer_network;
 
 use tokio;
+use clap::Parser;
 use peer_network::Node;
 use tokio::io::{self, AsyncBufReadExt, BufReader};
+
+#[derive(Parser, Debug)]
+struct Args {
+    #[arg(short, long, default_value_t = 8000, help = "port for running the node")]
+    port: u32,
+
+    #[arg(help = "list of peers to connect to")]
+    peers: Vec<String>,
+}
 
 #[tokio::main]
 async fn main() {
 
     let mut node = Node::new_node();
-    node.add_peer("127.0.0.1:8001");
-    node.server_start();
-    node.client_start();
+
+    let args = Args::parse();
+
+    for addr in args.peers {
+        node.add_peer(&addr).await;
+    }
+
+    node.client_listen().await;
+    node.server_listen(args.port).await;
 
     let msg_reciever = node.take_reciever();
 
