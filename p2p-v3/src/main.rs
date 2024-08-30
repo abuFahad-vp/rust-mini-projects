@@ -46,7 +46,13 @@ async fn main() {
         let stdin = BufReader::new(tokio::io::stdin());
         let mut lines = stdin.lines();
         while let Ok(Some(msg)) = lines.next_line().await {
-            node.send_msg(msg.trim()).await;
+            let msg = msg.trim();
+            let msg: Vec<&str> = msg.split(":").collect();
+            if msg[0] == "peer" {
+                node.add_peer(msg[1].to_string()).await;
+            } else {
+                node.send_msg(msg[0]).await;
+            }
         }
     }
 }

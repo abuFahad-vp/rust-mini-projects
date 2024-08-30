@@ -183,7 +183,7 @@ impl Node {
                     },
 
                     Err(e) => {
-                        eprint!("Connection closed: {e}"); 
+                        eprintln!("Connection closed: {e}"); 
                         return
                     }
                 }
