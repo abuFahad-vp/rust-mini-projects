@@ -3,6 +3,12 @@ use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::tcp::{OwnedReadHalf, OwnedWr
 use std::{collections::HashMap, str::FromStr, sync::Arc, fmt::Write};
 use sha2::{Digest, Sha256};
 
+#[derive(Debug)]
+pub enum Protocol {
+    Handshake, //handshake (permanent connection)
+    Unknown
+}
+
 pub struct Node {
     node_id: Uuid,
     port: u32,
@@ -78,7 +84,7 @@ impl Node {
         })
     }
 
-    async fn handle_connection(
+    async fn handle_connection (
         mut stream: tokio::net::TcpStream, 
         node_id: Uuid, 
         peer_connected: Arc<tokio::sync::Mutex<Vec<Uuid>>>,
@@ -86,43 +92,81 @@ impl Node {
         msg_incoming_tx: tokio::sync::mpsc::Sender<String>,
         msg_hashes: Arc<tokio::sync::Mutex<HashMap<String,bool>>>,
     ) {
-        
-        let mut peer_request = vec![0 as u8; 46]; // for reading uuid of client
 
-        if let Ok(_) = stream.read_exact(&mut peer_request).await {
-            let response = String::from_utf8(peer_request).unwrap();
-            let response: Vec<&str> = response.split(":").collect();
-            match response[..] {
-                // if proper request
-                ["HNDSHK", "01", uuid] => {
-                    let mut peer_connected = peer_connected.lock().await;
-                    let peer_uuid = Uuid::from_str(uuid).unwrap();
-                    if !peer_connected.contains(&peer_uuid) {
+        tokio::spawn(async move {
+            let protocol = Self::detect_protocol(&mut stream).await;
 
-                        peer_connected.push(peer_uuid);
-
-                        println!("Peer {uuid} accepted");
-
-                        // respond with success message
-                        let handshake_msg = format!("HNDSHK:10:{}", node_id);
-                        stream.write_all(handshake_msg.as_bytes()).await.unwrap();
-
-                        let (read_half, write_half) = stream.into_split();
-                        let mut write_streams = write_streams.lock().await;
-
-                        write_streams.push(write_half); // add to write_streams for writing to the clients
-
-                        Self::peer_receiver(read_half, msg_incoming_tx, msg_hashes).await;
-                    }
-                }
+            match protocol {
+                Protocol::Handshake => {
+                    Self::handle_handshake(stream,  peer_connected, node_id, write_streams, msg_incoming_tx, msg_hashes).await;
+                },
                 _ => {
-                    println!("Invalid response. Handshake rejected");
-                    let handshake_msg = format!("HNDSHK:00:{}", node_id);
-                    stream.write_all(handshake_msg.as_bytes()).await.unwrap();
+                    println!("Unknown protocol or format")
                 }
             }
-        }
+        });
 
+    }
+
+    async fn handle_handshake(
+        mut stream: tokio::net::TcpStream,
+        peer_connected: Arc<tokio::sync::Mutex<Vec<Uuid>>>,
+        node_id: Uuid,
+        write_streams: Arc<tokio::sync::Mutex<Vec<OwnedWriteHalf>>>,
+        msg_incoming_tx: tokio::sync::mpsc::Sender<String>,
+        msg_hashes: Arc<tokio::sync::Mutex<HashMap<String,bool>>>
+    ) {
+
+        let mut peer_request = vec![0 as u8; 46];
+
+        if let Err(e) = stream.read_exact(&mut peer_request).await {
+            println!("Handshake failed due to {e}");
+            return
+        }
+        let response = String::from_utf8(peer_request).unwrap();
+        let response: Vec<&str> = response.split(" ").collect();
+        match response[..] {
+            // if proper request
+            ["HNDSHK", "01", uuid] => {
+                let mut peer_connected = peer_connected.lock().await;
+                let peer_uuid = Uuid::from_str(uuid).unwrap();
+                if !peer_connected.contains(&peer_uuid) {
+
+                    peer_connected.push(peer_uuid);
+
+                    println!("Peer {uuid} accepted");
+
+                    // respond with success message
+                    let handshake_msg = format!("HNDSHK 10 {}", node_id);
+                    stream.write_all(handshake_msg.as_bytes()).await.unwrap();
+
+                    let (read_half, write_half) = stream.into_split();
+                    let mut write_streams = write_streams.lock().await;
+
+                    write_streams.push(write_half); // add to write_streams for writing to the clients
+
+                    Self::peer_receiver(read_half, msg_incoming_tx, msg_hashes).await;
+                }
+            }
+            _ => {
+                println!("Invalid response. Handshake rejected");
+                let handshake_msg = format!("HNDSHK 00 {}", node_id);
+                stream.write_all(handshake_msg.as_bytes()).await.unwrap();
+            }
+        }
+    }
+
+    async fn detect_protocol(stream: &mut tokio::net::TcpStream) -> Protocol {
+        let mut buf = [0; 1024];
+        if let Ok(n) = stream.peek(&mut buf).await {
+            if n >= 7 && &buf[..7] == b"HNDSHK " {
+                Protocol::Handshake
+            } else {
+                Protocol::Unknown
+            }
+        } else {
+            Protocol::Unknown
+        }
     }
 
     // Connecting to peer server. if successful use this thread to recieve messages and add the WriteHalf to collection for writing
@@ -152,34 +196,45 @@ impl Node {
             }
 
             let mut stream = stream.unwrap();
-            let handshake_msg = format!("HNDSHK:01:{}",node_id);
+            let handshake_msg = format!("HNDSHK 01 {}",node_id);
             stream.write_all(handshake_msg.as_bytes()).await.unwrap();
 
+
             let mut peer_response = vec![0 as u8; 46];
-            if let Ok(_) = stream.read_exact(&mut peer_response).await {
-                let response = String::from_utf8(peer_response).unwrap();
-                let response: Vec<&str> = response.split(":").collect();
-                if response[0] == "HNDSHK" {
-                    if response[1] == "10" {
-                        let mut peer_connected = peer_connected.lock().await;
-                        let peer_uuid = Uuid::from_str(response[2]).unwrap();
-                        if !peer_connected.contains(&peer_uuid) {
 
-                            peer_connected.push(peer_uuid);
+            if let Err(e) = stream.read_exact(&mut peer_response).await {
+                println!("Handshake failed due to {e}");
+                return
+            }
 
-                            println!("Peer {peer_uuid} accepted");
+            let response = String::from_utf8(peer_response).unwrap();
+            let tokens: Vec<&str> = response.split(" ").into_iter().filter(|x| !x.is_empty()).collect();
 
-                            let (read_half, write_half) = stream.into_split();
-                            let mut write_streams = write_streams.lock().await;
+            match tokens[..] {
+                ["HNDSHK", "10", uuid] => {
+                    let mut peer_connected = peer_connected.lock().await;
+                    let peer_uuid = Uuid::from_str(uuid).unwrap();
+                    if !peer_connected.contains(&peer_uuid) {
 
-                            write_streams.push(write_half); // add to write_streams for writing to the clients
+                        peer_connected.push(peer_uuid);
 
-                            Self::peer_receiver(read_half, msg_incoming_tx, msg_hashes).await;
-                            return
-                        }
+                        println!("Peer {peer_uuid} accepted");
+
+                        let (read_half, write_half) = stream.into_split();
+                        let mut write_streams = write_streams.lock().await;
+
+                        write_streams.push(write_half); // add to write_streams for writing to the clients
+
+                        Self::peer_receiver(read_half, msg_incoming_tx, msg_hashes).await;
+                        return
                     }
-                }
-                println!("Handshake rejected");
+                },
+                ["HNDSHK", "00", uuid] => {
+                    println!("Handshake rejected from the peer {uuid}. may be already connected")
+                },
+                _ => {
+                    println!("Invalid response or Handshake already established")
+                },
             }
         });
     }
