@@ -24,7 +24,7 @@ async fn main() {
 
     let args = Args::parse();
 
-    let mut node = peer_network::Node::new(args.port);
+    let mut node = peer_network::Node::new(args.port).await;
 
     node.server_listen().await;
 
@@ -33,25 +33,30 @@ async fn main() {
     }
 
     let msg_reciever = node.take_reciever();
+    let msg_transmitter = node.take_sender();
 
     tokio::spawn(async move {
         if let Some(mut reciever) = msg_reciever {
             while let Some(msg) = reciever.recv().await {
-                println!("{msg}")
+                println!("{msg}");
+                if let Err(e) = msg_transmitter.send(msg).await {
+                    eprintln!("Cannot transmit the message to internal reciever: {e}")
+                }
             }
         }
     });
 
-    loop {
-        let stdin = BufReader::new(tokio::io::stdin());
-        let mut lines = stdin.lines();
-        while let Ok(Some(msg)) = lines.next_line().await {
-            let msg = msg.trim();
-            let msg: Vec<&str> = msg.split(":").collect();
-            if msg[0] == "peer" {
-                node.add_peer(msg[1].to_string()).await;
-            } else {
-                node.send_msg(msg[0]).await;
+    let stdin = BufReader::new(tokio::io::stdin());
+    let mut lines = stdin.lines();
+    let msg_sender = node.take_sender();
+    while let Ok(Some(msg)) = lines.next_line().await {
+        let msg = msg.trim();
+        let msg: Vec<&str> = msg.split(":").collect();
+        if msg[0] == "peer" {
+            node.add_peer(msg[1].to_string()).await;
+        } else {
+            if let Err(e) = msg_sender.send(msg[0].to_string()).await {
+                eprintln!("Cannot transmit the message to internal reciever: {e}")
             }
         }
     }

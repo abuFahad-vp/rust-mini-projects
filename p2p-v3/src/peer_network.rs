@@ -1,8 +1,7 @@
 use uuid::Uuid;
-use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::tcp::OwnedWriteHalf, net::tcp::OwnedReadHalf};
-use std::{str::FromStr, sync::Arc};
-
-const SIZE: usize = 50;
+use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::tcp::{OwnedReadHalf, OwnedWriteHalf}};
+use std::{collections::HashMap, str::FromStr, sync::Arc, fmt::Write};
+use sha2::{Digest, Sha256};
 
 pub struct Node {
     node_id: Uuid,
@@ -14,22 +13,34 @@ pub struct Node {
 
     msg_incoming_tx: tokio::sync::mpsc::Sender<String>,
     msg_incoming_rx: Option<tokio::sync::mpsc::Receiver<String>>,
+
+    msg_outgoing_tx: tokio::sync::mpsc::Sender<String>,
+
+    msg_hashes: Arc<tokio::sync::Mutex<HashMap<String, bool>>>,
 }
 
 impl Node {
-    pub fn new(port: u32) -> Node {
+    pub async fn new(port: u32) -> Node {
 
         let (msg_incoming_tx, msg_incoming_rx) = tokio::sync::mpsc::channel::<String>(100);
+        let (msg_outgoing_tx, msg_outgoing_rx) = tokio::sync::mpsc::channel::<String>(100);
+        let write_streams =  Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let msg_hashes = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+
+        Self::send_msg(msg_outgoing_rx, write_streams.clone(), msg_hashes.clone()).await;
 
         Node {
             node_id: Uuid::new_v4(),
             port,
 
-            write_streams: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             peer_connected: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+            write_streams,
 
             msg_incoming_tx,
             msg_incoming_rx: Some(msg_incoming_rx),
+
+            msg_outgoing_tx,
+            msg_hashes,
         }
     }
 
@@ -41,6 +52,7 @@ impl Node {
         let peer_connected = self.peer_connected.clone();
         let write_streams = self.write_streams.clone();
         let msg_incoming_tx = self.msg_incoming_tx.clone();
+        let msg_hashes = self.msg_hashes.clone();
 
         tokio::spawn(async move {
 
@@ -54,11 +66,12 @@ impl Node {
                 let peer_connected = peer_connected.clone();
                 let write_streams = write_streams.clone();
                 let msg_incoming_tx = msg_incoming_tx.clone();
+                let msg_hashes = msg_hashes.clone();
 
                 if let Ok((stream, addr)) = listener.accept().await {
                     println!("New Peer Connected: {addr}");
                     tokio::spawn(async move {
-                        Self::handle_connection(stream, node_id, peer_connected, write_streams, msg_incoming_tx).await;
+                        Self::handle_connection(stream, node_id, peer_connected, write_streams, msg_incoming_tx,msg_hashes).await;
                     });
                 }
             }
@@ -71,6 +84,7 @@ impl Node {
         peer_connected: Arc<tokio::sync::Mutex<Vec<Uuid>>>,
         write_streams: Arc<tokio::sync::Mutex<Vec<OwnedWriteHalf>>>,
         msg_incoming_tx: tokio::sync::mpsc::Sender<String>,
+        msg_hashes: Arc<tokio::sync::Mutex<HashMap<String,bool>>>,
     ) {
         
         let mut peer_request = vec![0 as u8; 46]; // for reading uuid of client
@@ -98,7 +112,7 @@ impl Node {
 
                         write_streams.push(write_half); // add to write_streams for writing to the clients
 
-                        Self::peer_receiver(read_half, msg_incoming_tx).await;
+                        Self::peer_receiver(read_half, msg_incoming_tx, msg_hashes).await;
                     }
                 }
                 _ => {
@@ -120,6 +134,7 @@ impl Node {
         let peer_connected = self.peer_connected.clone();
         let write_streams = self.write_streams.clone();
         let msg_incoming_tx = self.msg_incoming_tx.clone();
+        let msg_hashes = self.msg_hashes.clone();
 
         tokio::spawn(async move {
             println!("Connecting to {addr}...");
@@ -159,7 +174,7 @@ impl Node {
 
                             write_streams.push(write_half); // add to write_streams for writing to the clients
 
-                            Self::peer_receiver(read_half, msg_incoming_tx).await;
+                            Self::peer_receiver(read_half, msg_incoming_tx, msg_hashes).await;
                             return
                         }
                     }
@@ -169,21 +184,38 @@ impl Node {
         });
     }
 
-    async fn peer_receiver(mut stream: OwnedReadHalf, msg_incoming_tx: tokio::sync::mpsc::Sender<String>) {
+    async fn peer_receiver(mut stream: OwnedReadHalf, 
+        msg_incoming_tx: tokio::sync::mpsc::Sender<String>,
+        msg_hashes: Arc<tokio::sync::Mutex<HashMap<String,bool>>>
+    ) {
+        let msg_hashes = msg_hashes.clone();
         tokio::spawn(async move {
             loop {
-                let mut buff = vec![0 as u8; SIZE];
-                match stream.read_exact(&mut buff).await {
-                    Ok(_) => {
-                        let msg = buff.into_iter().take_while(|&x| x != 0).collect::<Vec<_>>();
-                        if let Err(e) = msg_incoming_tx.send(String::from_utf8(msg).unwrap()).await {
+                let mut buff = vec![0 as u8; 8];
+                if let Ok(_) = stream.read_exact(&mut buff).await { // read the length of the message
+
+                    // converting bytes to usize
+                    let mut msg_len = [0u8; std::mem::size_of::<usize>()];
+                    msg_len.copy_from_slice(&buff);
+                    let msg_len = usize::from_be_bytes(msg_len);
+
+                    buff.clear();
+                    buff.resize(msg_len, 0);
+                    if let Ok(_) = stream.read_exact(&mut buff).await {
+                        let msg = String::from_utf8(buff).unwrap();
+
+                        // continue if the message is already recieved
+                        let data_hash = Self::hash(&msg);
+                        let mut msg_hashes = msg_hashes.lock().await;
+                        if let Some(_) = msg_hashes.get(&data_hash) {
+                            continue;
+                        }
+
+                        msg_hashes.insert(data_hash, true);
+
+                        if let Err(e) = msg_incoming_tx.send(msg).await {
                             println!("Failed to send the message from client {} to message reciever due to {e}", stream.peer_addr().unwrap())
                         }
-                    },
-
-                    Err(e) => {
-                        eprintln!("Connection closed: {e}"); 
-                        return
                     }
                 }
             }
@@ -194,24 +226,67 @@ impl Node {
         std::mem::take(&mut self.msg_incoming_rx)
     }
 
-    pub async fn send_msg(&mut self, msg: &str) {
+    pub fn take_sender(&mut self) -> tokio::sync::mpsc::Sender<String> {
+        self.msg_outgoing_tx.clone()
+    }
 
-        let mut write_stream = self.write_streams.lock().await;
+    async fn send_msg(mut msg_outgoing_rx: tokio::sync::mpsc::Receiver<String>, 
+        write_streams: Arc<tokio::sync::Mutex<Vec<OwnedWriteHalf>>>,
+        msg_hashes: Arc<tokio::sync::Mutex<HashMap<String,bool>>>,
+    ) {
+        let write_streams = write_streams.clone();
+        let msg_hashes = msg_hashes.clone();
 
-        let mut msg = msg.trim().as_bytes().to_vec();
-        msg.resize(SIZE, 0);
+        tokio::spawn(async move {
+            while let Some(data) = msg_outgoing_rx.recv().await {
 
-        let mut clients_to_remove = vec![];
+                // Add data hash to already seen
+                let mut msg_hashes = msg_hashes.lock().await;
+                let data_hash = Self::hash(&data);
 
-        for (i, stream) in write_stream.iter_mut().enumerate() {
-            if let Err(e) = stream.write_all(&msg).await {
-                println!("Failed to write to the peer {}: {e}",stream.peer_addr().unwrap());
-                clients_to_remove.push(i)
+                msg_hashes.insert(data_hash, true);
+
+                let msg = Self::encode_msg_bytes(data.as_bytes());
+                let mut write_stream = write_streams.lock().await;
+
+                let mut clients_to_remove = vec![];
+
+                for (i, stream) in write_stream.iter_mut().enumerate() {
+                    if let Err(e) = stream.write_all(&msg).await {
+                        println!("Failed to write to the peer {}: {e}",stream.peer_addr().unwrap());
+                        clients_to_remove.push(i)
+                    }
+                }
+
+                for &index in clients_to_remove.iter().rev() {
+                    write_stream.remove(index);
+                } 
             }
-        }
+        });
+    }
 
-        for &index in clients_to_remove.iter().rev() {
-            write_stream.remove(index);
-        } 
+    fn encode_msg_bytes(msg: &[u8]) -> Vec<u8> {
+        let header = (msg.len()).to_be_bytes();
+        let mut msg_vec = Vec::with_capacity(msg.len() + header.len());
+        msg_vec.extend_from_slice(&header);
+        msg_vec.extend_from_slice(msg);
+        msg_vec
+    }
+
+    fn hash(data: &str) -> String{
+        let mut hasher = Sha256::new();
+        hasher.update(data);
+        let res = hasher.finalize();
+        let vec_res = res.to_vec();
+
+        Self::hex_to_string(vec_res.as_slice())
+    }
+
+    fn hex_to_string(vec_res: &[u8]) -> String {
+        let mut s = String::new();
+        for b in vec_res {
+            write!(&mut s, "{:x}",b).expect("unable to write");
+        }
+        s
     }
 }
