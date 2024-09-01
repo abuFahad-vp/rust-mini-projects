@@ -9,7 +9,6 @@ pub enum Protocol {
     Unknown
 }
 
-
 #[derive(Debug)]
 pub struct Message {
     pub uuid: Uuid,
