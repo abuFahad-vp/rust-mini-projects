@@ -2,35 +2,56 @@ use std::io;
 use std::io::Write;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use rocksdb::{Options, DB};
 
 use crate::blockchain::blockchain_core::Chain;
-use crate::template;
+use crate::template::{self, MenuBuilder};
 
-pub fn blockchain_app() {
-    let mut miner_addr = String::new();
-    let mut difficulty = String::new();
+use super::peer_network;
 
-    print!("Input miner address: ");
-    io::stdout().flush().expect("Failed to flush the stdout.");
-    io::stdin().read_line(&mut miner_addr).expect("Failed to read the miner address");
+pub async fn blockchain_app() {
 
-    print!("Difficulty: ");
-    io::stdout().flush().expect("Failed to flush the stdout.");
-    io::stdin().read_line(&mut difficulty).expect("Failed to read the difficulty");
+    let miner_addr = get_values("Input miner address: ");
+    let difficulty = get_values("Difficulty: ");
+    let port = get_values("port: ");
 
     let diff = difficulty
         .trim()
         .parse::<u32>()
         .expect("we need an integer");
-    
+
+    let port = port
+        .trim()
+        .parse::<u32>()
+        .expect("we need an integer");
+
+    // db initialization    
     let db_path = "amanah.db";
     let mut db_opts = Options::default();
     db_opts.create_if_missing(true);
     let db = DB::open(&db_opts, db_path).unwrap();
+
+    // node initialization
+    let node = peer_network::Node::new(port).await;
+
+    node.server_listen().await;
+
+    let pre_page = template::MenuBuilder::new();
+    let peers = Arc::new(Mutex::new(Vec::<String>::new()));
+    let peers_clone = peers.clone();
+    pre_pade.add("1", "Add peer", || {
+        std
+    });
+
     let chain = Rc::new(RefCell::new(
         Chain::new(miner_addr.trim().to_string(), diff, db)
     ));
+
+    let blockchain_page = blockchain_user(chain.clone());
+}
+
+fn blockchain_user(chain: Rc<RefCell<Chain>>) -> MenuBuilder {
 
     let mut blockchain_page = template::MenuBuilder::new();
     blockchain_page.set_header("MENU".to_string());
@@ -91,8 +112,7 @@ pub fn blockchain_app() {
             true
         }
     });
-
-    blockchain_page.run_menu();
+    blockchain_page
 }
 
 fn show_hash_by_index(chain: Rc<RefCell<Chain>>) {
@@ -165,4 +185,12 @@ fn change_reward(chain: Rc<RefCell<Chain>>) {
         true => println!("Updated reward"),
         false => println!("Failed to update the reward")
     }
+}
+
+fn get_values(msg: &str) -> String {
+    let mut value = String::new();
+    print!("{}", msg);
+    io::stdout().flush().expect("Failed to flush the stdout.");
+    io::stdin().read_line(&mut value).expect("Failed to read the miner address");
+    value
 }
