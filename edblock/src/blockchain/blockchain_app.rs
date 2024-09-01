@@ -2,6 +2,7 @@ use std::io;
 use std::io::Write;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use rocksdb::{Options, DB};
 
 use crate::blockchain::blockchain_core::Chain;
@@ -18,6 +19,31 @@ pub fn blockchain_app() {
     print!("Difficulty: ");
     io::stdout().flush().expect("Failed to flush the stdout.");
     io::stdin().read_line(&mut difficulty).expect("Failed to read the difficulty");
+
+    // adding peer
+    let peers = Arc::new(Mutex::new(Vec::<String>::new()));
+    let peers_clone = peers.clone();
+    let mut pre_page = template::MenuBuilder::new();
+
+    pre_page.add("1", "Add peer", move || {
+        let mut peers = peers_clone.lock().unwrap();
+        let mut peer = String::new();
+        print!("peer address: ");
+        io::stdout().flush().expect("Failed to flush the stdout.");
+        io::stdin().read_line(&mut peer).expect("Failed to read the difficulty");
+        peers.push(peer);
+        true
+    });
+
+    pre_page.add("0", "Exit" , || {
+        false
+    });
+
+    pre_page.run_menu();
+
+    for (i, peer) in peers.lock().unwrap().iter().enumerate() {
+        println!("peer {i}:{peer}");
+    }
 
     let diff = difficulty
         .trim()
