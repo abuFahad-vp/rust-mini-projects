@@ -10,6 +10,7 @@ struct Args {
     port: u32,
 }
 
-fn main() {
-    blockchain::blockchain_app::blockchain_app(Args::parse());
+#[tokio::main]
+async fn main() {
+    blockchain::blockchain_app::blockchain_app().await;
 }

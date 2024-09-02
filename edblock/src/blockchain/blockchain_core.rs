@@ -1,11 +1,14 @@
 use serde_derive::{Serialize, Deserialize};
 use sha2::{Digest, Sha256};
+use uuid::Uuid;
 use core::str;
 use std::fmt::Write;
 use rocksdb::DB;
 use crate::utils::get_value;
 
 use chrono::prelude::*;
+
+use super::peer_network::{Message, Node};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Transaction {
@@ -25,8 +28,8 @@ pub struct Blockheader {
 
 #[derive(Serialize, Debug, Clone, Deserialize)]
 pub struct Block {
-    header: Blockheader,
-    count: u32,
+    pub header: Blockheader,
+    pub count: u32,
     transactions: Vec<Transaction>,
 }
 
@@ -37,11 +40,25 @@ pub struct Chain {
     difficulty: u32,
     miner_addr: String,
     reward: f32,
+    uuid: Uuid,
+    node: Node,
 }
 
 // can only create one instances of the struct
 impl Chain {
-    pub fn new(db: DB) -> Chain {
+    pub async fn new(db: DB, port: u16) -> Chain {
+
+        let node = Node::new(port).await;
+        node.server_listen().await;
+        let node_clone = node.clone();
+
+        tokio::spawn(async move {
+            Self::message_reciever(
+                node_clone.msg_incoming_rx.clone(),
+                node_clone.msg_outgoing_tx.clone()).await;
+        });
+
+
         let mut chain = Chain {
             db,
             height: 0,
@@ -49,7 +66,10 @@ impl Chain {
             difficulty: 2,
             miner_addr: "".to_string(),
             reward: 100.0,
+            uuid: node.get_id(),
+            node,
         };
+
         let height = chain.get_height();
         if height == 0 {
             chain.generate_new_block();
@@ -57,6 +77,25 @@ impl Chain {
             chain.height = height;
         }
         chain
+    }
+
+    async fn message_reciever(
+        msg_incoming_rx: crossbeam_channel::Receiver<Message>,
+        msg_outgoing_tx: crossbeam_channel::Sender<Message>
+    ) {
+        tokio::spawn(async move {
+            let reciever = msg_incoming_rx;
+            while let Ok(msg) = reciever.recv() {
+                println!("{msg:?}");
+                if let Err(e) = msg_outgoing_tx.send(msg) {
+                    eprintln!("Cannot transmit the message to internal reciever: {e}")
+                }
+            }
+        });
+    }
+
+    pub async fn add_peer(&self, peer_addr: String) {
+        self.node.add_peer(peer_addr).await;
     }
 
     pub fn get_height(&self) -> u32 {
@@ -200,8 +239,15 @@ impl Chain {
         if self.db.put("height", (self.height + 1).to_be_bytes()).is_err() {
             return false;
         }
+
         self.height += 1;
         self.db.flush().expect("Failed to add the data to the db");
+        if let Err(e) = self.node.msg_outgoing_tx.send(Message {
+            uuid: self.uuid,
+            message: block
+        }) {
+            println!("Cannot broadcast the block due to {e}: ")
+        };
         true
     }
 

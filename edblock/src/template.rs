@@ -1,9 +1,11 @@
+use std::future::Future;
 use std::io::Write;
 use std::collections::HashMap;
+use std::pin::Pin;
 
 pub struct MenuBuilder {
     header: String,
-    menus: HashMap<&'static str, (&'static str, Box<dyn Fn() -> bool>)>
+    menus: std::collections::HashMap<&'static str, (&'static str, Box<dyn Fn() -> Pin<Box<dyn Future<Output = bool> + Send>> + Send>)>,
 }
 
 impl MenuBuilder {
@@ -16,14 +18,15 @@ impl MenuBuilder {
         self.header = header;
     }
 
-    pub fn add<F>(&mut self, key: &'static str, desc: &'static str, fx: F)
+    pub fn add<F, Fut>(&mut self, key: &'static str, desc: &'static str, fx: F)
     where 
-        F: Fn() -> bool + 'static
+        F: Fn() -> Fut + 'static + Send,
+        Fut: Future<Output = bool> + 'static + Send
     {
-        let _ = self.menus.insert(key, (desc, Box::new(fx)));
+        let _ = self.menus.insert(key, (desc, Box::new(move || Box::pin(fx()))));
     }
 
-    pub fn run_menu(&self) {
+    pub async fn run_menu(&self) {
         println!("{}", self.header);
         loop {
             println!("");
@@ -39,7 +42,7 @@ impl MenuBuilder {
             std::io::stdin().read_line(&mut choice).expect("Failed to read from stdin: INTERNAL ERROR");
             match self.menus.get(choice.trim()) {
                 Some((_,fx)) => {
-                    if !fx(){
+                    if !(fx().await) {
                         break;
                     }
                 }

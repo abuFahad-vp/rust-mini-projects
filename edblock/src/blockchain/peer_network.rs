@@ -1,7 +1,10 @@
 use uuid::Uuid;
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::tcp::{OwnedReadHalf, OwnedWriteHalf}};
-use std::{collections::HashMap, fmt::Write, str::FromStr, sync::Arc};
-use sha2::{Digest, Sha256};
+use core::str;
+use std::{collections::HashMap, str::FromStr, sync::Arc};
+use super::Chain;
+
+use super::blockchain_core::Block;
 
 #[derive(Debug)]
 pub enum Protocol {
@@ -12,28 +15,29 @@ pub enum Protocol {
 #[derive(Debug)]
 pub struct Message {
     pub uuid: Uuid,
-    pub message: String
+    pub message: Block
 }
 
+#[derive(Clone)]
 pub struct Node {
-    node_id: Uuid,
-    port: u32,
+    pub node_id: Uuid,
+    pub port: u16,
 
-    write_streams: Arc<tokio::sync::Mutex<HashMap<Uuid, OwnedWriteHalf>>>,
+    pub write_streams: Arc<tokio::sync::Mutex<HashMap<Uuid, OwnedWriteHalf>>>,
 
-    peer_connected: Arc<tokio::sync::Mutex<Vec<Uuid>>>,
+    pub peer_connected: Arc<tokio::sync::Mutex<Vec<Uuid>>>,
 
-    msg_incoming_tx: crossbeam_channel::Sender<Message>,
-    msg_incoming_rx: crossbeam_channel::Receiver<Message>,
+    pub msg_incoming_tx: crossbeam_channel::Sender<Message>,
+    pub msg_incoming_rx: crossbeam_channel::Receiver<Message>,
 
-    msg_outgoing_tx: crossbeam_channel::Sender<Message>,
+    pub msg_outgoing_tx: crossbeam_channel::Sender<Message>,
     // msg_outgoing_rx: crossbeam_channel::Receiver<Message>,
 
-    msg_hashes: Arc<tokio::sync::Mutex<HashMap<String, bool>>>,
+    pub msg_hashes: Arc<tokio::sync::Mutex<HashMap<String, bool>>>,
 }
 
 impl Node {
-    pub async fn new(port: u32) -> Node {
+    pub async fn new(port: u16) -> Node {
 
         let (msg_incoming_tx, msg_incoming_rx) = crossbeam_channel::unbounded();
         let (msg_outgoing_tx, msg_outgoing_rx) = crossbeam_channel::unbounded();
@@ -310,10 +314,10 @@ impl Node {
                     eprintln!("Connection closed. Failed to recieve the message: {e}");
                     break;
                 }
-                let msg = String::from_utf8(buff).unwrap();
 
+                let block :Block = serde_json::from_str(str::from_utf8(&buff).unwrap()).unwrap();
                 // continue if the message is already recieved
-                let data_hash = Self::hash(&msg);
+                let data_hash = Chain::hash(&block.header);
                 let mut msg_hashes = msg_hashes.lock().await;
                 if let Some(_) = msg_hashes.get(&data_hash) {
                     continue;
@@ -321,7 +325,7 @@ impl Node {
 
                 msg_hashes.insert(data_hash, true);
 
-                if let Err(e) = msg_incoming_tx.send(Message {uuid, message: msg}) {
+                if let Err(e) = msg_incoming_tx.send(Message {uuid, message: block}) {
                     println!("Failed to send the message from client {} to message reciever due to {e}", stream.peer_addr().unwrap())
                 }
             }
@@ -348,11 +352,11 @@ impl Node {
 
                 // Add data hash to already seen
                 let mut msg_hashes = msg_hashes.lock().await;
-                let data_hash = Self::hash(&data.message);
+                let data_hash = Chain::hash(&data.message.header);
 
                 msg_hashes.insert(data_hash, true);
 
-                let msg = Self::encode_msg_bytes(data.message.as_bytes(), data.uuid);
+                let msg = Self::encode_msg_bytes(&data.message, data.uuid);
                 let mut write_stream = write_streams.lock().await;
 
                 let mut clients_to_remove = vec![];
@@ -371,29 +375,13 @@ impl Node {
         });
     }
 
-    fn encode_msg_bytes(msg: &[u8], node_id: Uuid) -> Vec<u8> {
+    fn encode_msg_bytes(block: &Block, node_id: Uuid) -> Vec<u8> {
+        let msg = serde_json::to_string(&block).unwrap();
         let header = (msg.len()).to_be_bytes();
         let mut msg_vec = Vec::with_capacity(msg.len() + header.len());
         msg_vec.extend_from_slice(&header);
         msg_vec.extend(node_id.as_bytes());
-        msg_vec.extend_from_slice(msg);
+        msg_vec.extend_from_slice(msg.as_bytes());
         msg_vec
-    }
-
-    fn hash(data: &str) -> String{
-        let mut hasher = Sha256::new();
-        hasher.update(data);
-        let res = hasher.finalize();
-        let vec_res = res.to_vec();
-
-        Self::hex_to_string(vec_res.as_slice())
-    }
-
-    fn hex_to_string(vec_res: &[u8]) -> String {
-        let mut s = String::new();
-        for b in vec_res {
-            write!(&mut s, "{:x}",b).expect("unable to write");
-        }
-        s
     }
 }

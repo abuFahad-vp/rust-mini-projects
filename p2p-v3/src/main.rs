@@ -36,12 +36,10 @@ async fn main() {
     let msg_transmitter = node.take_sender();
 
     tokio::spawn(async move {
-        if let Some(mut reciever) = msg_reciever {
-            while let Some(msg) = reciever.recv().await {
-                println!("{msg:?}");
-                if let Err(e) = msg_transmitter.send(msg).await {
-                    eprintln!("Cannot transmit the message to internal reciever: {e}")
-                }
+        while let Ok(msg) = msg_reciever.recv() {
+            println!("{msg:?}");
+            if let Err(e) = msg_transmitter.send(msg) {
+                eprintln!("Cannot transmit the message to internal reciever: {e}")
             }
         }
     });
@@ -55,7 +53,7 @@ async fn main() {
         if msg[0] == "peer" {
             node.add_peer(msg[1].to_string()).await;
         } else {
-            if let Err(e) = msg_sender.send(peer_network::Message { uuid: node.get_id(), message: msg[0].to_string()}).await {
+            if let Err(e) = msg_sender.send(peer_network::Message { uuid: node.get_id(), message: msg[0].to_string()}) {
                 eprintln!("Cannot transmit the message to internal reciever: {e}")
             }
         }
