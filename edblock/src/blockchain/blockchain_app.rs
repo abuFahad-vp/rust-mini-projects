@@ -1,154 +1,153 @@
-use std::io;
-use std::io::Write;
-use std::cell::RefCell;
-use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use rocksdb::{Options, DB};
-
+use local_ip_address::local_ip;
 use crate::blockchain::blockchain_core::Chain;
-use crate::template;
+use crate::template::{self, MenuBuilder};
+use crate::utils::get_value;
+use crate::Args;
 
-pub fn blockchain_app() {
-    let mut miner_addr = String::new();
-    let mut difficulty = String::new();
+pub fn blockchain_app(args: Args) {
 
-    print!("Input miner address: ");
-    io::stdout().flush().expect("Failed to flush the stdout.");
-    io::stdin().read_line(&mut miner_addr).expect("Failed to read the miner address");
-
-    print!("Difficulty: ");
-    io::stdout().flush().expect("Failed to flush the stdout.");
-    io::stdin().read_line(&mut difficulty).expect("Failed to read the difficulty");
-
-    // adding peer
-    let peers = Arc::new(Mutex::new(Vec::<String>::new()));
-    let peers_clone = peers.clone();
-    let mut pre_page = template::MenuBuilder::new();
-
-    pre_page.add("1", "Add peer", move || {
-        let mut peers = peers_clone.lock().unwrap();
-        let mut peer = String::new();
-        print!("peer address: ");
-        io::stdout().flush().expect("Failed to flush the stdout.");
-        io::stdin().read_line(&mut peer).expect("Failed to read the difficulty");
-        peers.push(peer);
-        true
-    });
-
-    pre_page.add("0", "Exit" , || {
-        false
-    });
-
-    pre_page.run_menu();
-
-    for (i, peer) in peers.lock().unwrap().iter().enumerate() {
-        println!("peer {i}:{peer}");
-    }
-
-    let diff = difficulty
-        .trim()
-        .parse::<u32>()
-        .expect("we need an integer");
-    
     let db_path = "amanah.db";
     let mut db_opts = Options::default();
     db_opts.create_if_missing(true);
     let db = DB::open(&db_opts, db_path).unwrap();
-    let chain = Rc::new(RefCell::new(
-        Chain::new(miner_addr.trim().to_string(), diff, db)
+
+    let chain = Arc::new(Mutex::new(
+        Chain::new(db)
     ));
 
+    let peers = Arc::new(Mutex::new(Vec::new()));
+    get_peers(peers.clone());
+    for peer in peers.lock().unwrap().iter() {
+        println!("peers = {}",peer);
+    }
+
+    blockchain_start(chain, args).run_menu();
+}
+
+fn blockchain_start(chain: Arc<Mutex<Chain>>, args: Args) -> MenuBuilder {
+    let header = format!("
+    Welcome to shuranetwork!!
+    IP ADDRESS: {}:{}
+    ", local_ip().expect("Failed to get the local ip. Internal Error"), args.port);
+
     let mut blockchain_page = template::MenuBuilder::new();
-    blockchain_page.set_header("MENU".to_string());
+    blockchain_page.set_header(header);
 
     blockchain_page.add("0", "Exit", || {
         false
     });
 
-    blockchain_page.add("1", "New Transaction", {
-        let chain = Rc::clone(&chain);
+    let chain_clone = chain.clone();
+    blockchain_page.add("1", "New Transaction",
         move || {
-            new_transaction(chain.clone());
+            let chain = chain_clone.clone();
+            new_transaction(chain);
             true
-    }});
+    });
 
+    let chain_clone = chain.clone();
     blockchain_page.add("2", "Mine block", {
-        let chain = Rc::clone(&chain);
         move || {
-            mine_block(chain.clone());
+            let chain = chain_clone.clone();
+            mine_block(chain);
             true
     }});
 
+    let chain_clone = chain.clone();
     blockchain_page.add("3", "Change difficulty", {
-        let chain = Rc::clone(&chain);
         move || {
-            change_difficulty(chain.clone());
+            let chain = chain_clone.clone();
+            change_difficulty(chain);
             true
     }});
 
+    let chain_clone = chain.clone();
     blockchain_page.add("4", "Change Reward", {
-        let chain = Rc::clone(&chain);
         move || {
-            change_reward(chain.clone());
+            let chain = chain_clone.clone();
+            change_reward(chain);
             true
         }
     });
 
+    let chain_clone = chain.clone();
     blockchain_page.add("5", "reveal chain", {
-        let chain = Rc::clone(&chain);
         move || {
-            chain.borrow_mut().reveal_chain();
+            let chain = chain_clone.lock().unwrap();
+            chain.reveal_chain();
             true
         }
     });
 
+    let chain_clone = chain.clone();
     blockchain_page.add("6", "Show height", {
-        let chain = Rc::clone(&chain);
         move || {
-            println!("height: {}",chain.borrow().get_height());
+            let chain = chain_clone.lock().unwrap();
+            println!("height: {}",chain.get_height());
             true
         }
     });
 
+    let chain_clone = chain.clone();
     blockchain_page.add("7", "Show hash by index", {
-        let chain = Rc::clone(&chain);
         move || {
-            show_hash_by_index(chain.clone());
+            let chain = chain_clone.clone();
+            show_hash_by_index(chain);
             true
         }
     });
 
-    blockchain_page.run_menu();
+    let chain_clone = chain.clone();
+    blockchain_page.add("8", "Change miner address", {
+        move || {
+            let chain = chain_clone.clone();
+            change_miner_address(chain);
+            true
+        }
+    });
+    blockchain_page
 }
 
-fn show_hash_by_index(chain: Rc<RefCell<Chain>>) {
-    print!("input index: ");
-    std::io::stdout().flush().expect("Failed to flush the stdout");
-    let mut choice = String::new();
-    std::io::stdin().read_line(&mut choice).expect("Failed to read the index");
+fn get_peers(peers: Arc<Mutex<Vec<String>>>) {
+
+    // adding peer
+    let peers_clone = peers.clone();
+    let mut peer_page = template::MenuBuilder::new();
+
+    peer_page.add("1", "Add peer", move || {
+        let mut peers = peers_clone.lock().unwrap();
+        peers.push(get_value("Add peer address: "));
+        true
+    });
+
+    peer_page.add("0", "Continue" , || {
+        false
+    });
+    peer_page.run_menu();
+}
+
+fn show_hash_by_index(chain: Arc<Mutex<Chain>>) {
+
+    let choice = get_value("Input index: ");
+
+    let chain = chain.lock().unwrap();
     if let Ok(choice) = choice.trim().parse::<u32>() {
-        println!("hash of index {}: {:?}",choice, chain.borrow().get_hash_by_index(choice));
+        println!("hash of index {}: {:?}",choice, chain.get_hash_by_index(choice));
     } else {
         println!("Invalid input");
     }
 }
 
-fn new_transaction(chain: Rc<RefCell<Chain>>) {
-    let mut sender = String::new();
-    let mut reciever = String::new();
-    let mut amount  = String::new();
+fn new_transaction(chain: Arc<Mutex<Chain>>) {
+    let sender = get_value("Enter Sender Address: ");
+    let reciever = get_value("Enter Reciever Address: ");
+    let amount = get_value("Enter the amount: ");
 
-    print!("enter sender address: ");
-    io::stdout().flush().expect("Failed to flush the stdout.");
-    io::stdin().read_line(&mut sender).expect("Failed to read the sender address");
-    print!("enter reciever address: ");
-    io::stdout().flush().expect("Failed to flush the stdout.");
-    io::stdin().read_line(&mut reciever).expect("Failed to read the reciever address");
-    print!("Enter amount: ");
-    io::stdout().flush().expect("Failed to flush the stdout.");
-    io::stdin().read_line(&mut amount).expect("Failed to read the amount");
+    let mut chain = chain.lock().unwrap();
 
-    let res = chain.borrow_mut().new_transaction(
+    let res = chain.new_transaction(
         sender.trim().to_string(),
         reciever.trim().to_string(),
         amount.trim().parse().unwrap()
@@ -160,35 +159,40 @@ fn new_transaction(chain: Rc<RefCell<Chain>>) {
     }
 }
 
-fn mine_block(chain: Rc<RefCell<Chain>>) {
+fn mine_block(chain: Arc<Mutex<Chain>>) {
     println!("Generating block...");
-    let res = chain.borrow_mut().generate_new_block();
+    let mut chain = chain.lock().unwrap();
+    let res = chain.generate_new_block();
     match res {
         true => println!("Block added successfully"),
         false => println!("Block failed to add")
     }
 }
 
-fn change_difficulty(chain: Rc<RefCell<Chain>>) {
-    let mut new_diff = String::new();
-    print!("Enter new difficulty: ");
-    io::stdout().flush().expect("Failed to flush the stdout.");
-    io::stdin().read_line(&mut new_diff).expect("Failed to read the new difficulity");
-    let res = chain.borrow_mut().update_difficulty(new_diff.trim().parse().unwrap());
+fn change_difficulty(chain: Arc<Mutex<Chain>>) {
+
+    let new_diff = get_value("Enter new difficulty: ");
+    
+    let mut chain = chain.lock().unwrap();
+    let res = chain.update_difficulty(new_diff.trim().parse().unwrap());
     match res {
         true => println!("Updated Difficulty"),
         false => println!("Failed to update the difficulty")
     }
 }
 
-fn change_reward(chain: Rc<RefCell<Chain>>) {
-    let mut new_reward = String::new();
-    print!("Enter new reward: ");
-    io::stdout().flush().expect("Failed to flush the stdout.");
-    io::stdin().read_line(&mut new_reward).expect("Failed to read the reward");
-    let res = chain.borrow_mut().update_reward(new_reward.trim().parse().unwrap());
+fn change_reward(chain: Arc<Mutex<Chain>>) {
+    let new_reward = get_value("Enter new reward: ");
+
+    let mut chain = chain.lock().unwrap();
+    let res = chain.update_reward(new_reward.trim().parse().unwrap());
     match res {
         true => println!("Updated reward"),
         false => println!("Failed to update the reward")
     }
+}
+fn change_miner_address(chain: Arc<Mutex<Chain>>) {
+    let miner_addr = get_value("Enter new miner address: ");
+    let mut chain = chain.lock().unwrap();
+    chain.update_miner_address(miner_addr);
 }

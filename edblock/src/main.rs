@@ -1,6 +1,6 @@
 mod template;
 mod blockchain;
-mod starter;
+mod utils;
 
 use clap::Parser;
 
@@ -11,5 +11,5 @@ struct Args {
 }
 
 fn main() {
-    starter::starter_page(Args::parse());
+    blockchain::blockchain_app::blockchain_app(Args::parse());
 }

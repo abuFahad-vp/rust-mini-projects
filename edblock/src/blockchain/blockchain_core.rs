@@ -3,6 +3,7 @@ use sha2::{Digest, Sha256};
 use core::str;
 use std::fmt::Write;
 use rocksdb::DB;
+use crate::utils::get_value;
 
 use chrono::prelude::*;
 
@@ -40,13 +41,13 @@ pub struct Chain {
 
 // can only create one instances of the struct
 impl Chain {
-    pub fn new(miner_addr: String, difficulty: u32, db: DB) -> Chain {
+    pub fn new(db: DB) -> Chain {
         let mut chain = Chain {
             db,
             height: 0,
             curr_trans: Vec::new(),
-            difficulty,
-            miner_addr,
+            difficulty: 2,
+            miner_addr: "".to_string(),
             reward: 100.0,
         };
         let height = chain.get_height();
@@ -137,6 +138,10 @@ impl Chain {
         true
     }
 
+    pub fn update_miner_address(&mut self, miner_address: String) {
+        self.miner_addr = miner_address;
+    }
+
     pub fn update_reward(&mut self, reward: f32) -> bool {
         self.reward = reward;
         true
@@ -147,6 +152,12 @@ impl Chain {
             println!("No transaction to add!!");
             return false;
         }
+
+        self.miner_addr = if self.miner_addr.is_empty() {
+            get_value("Enter the miner address: ")
+        } else {
+            self.miner_addr.clone()
+        };
 
         let header = Blockheader {
             timestamp: Utc::now().timestamp_millis(),
