@@ -5,7 +5,7 @@ use std::pin::Pin;
 
 pub struct MenuBuilder {
     header: String,
-    menus: std::collections::HashMap<&'static str, (&'static str, Box<dyn Fn() -> Pin<Box<dyn Future<Output = bool> + Send>> + Send>)>,
+    menus: std::collections::HashMap<String, (&'static str, Box<dyn Fn() -> Pin<Box<dyn Future<Output = bool> + Send>> + Send>)>,
 }
 
 impl MenuBuilder {
@@ -23,15 +23,20 @@ impl MenuBuilder {
         F: Fn() -> Fut + 'static + Send,
         Fut: Future<Output = bool> + 'static + Send
     {
-        let _ = self.menus.insert(key, (desc, Box::new(move || Box::pin(fx()))));
+        let _ = self.menus.insert(key.to_string(), (desc, Box::new(move || Box::pin(fx()))));
     }
 
     pub async fn run_menu(&self) {
         println!("{}", self.header);
         loop {
             println!("");
-            for (key, (desc,_)) in &self.menus {
-                println!("{key}: {}",desc)
+            let mut keys: Vec<u32> = self.menus.keys().map(|x| {
+                x.parse::<u32>().unwrap()
+            }).collect();
+            keys.sort();
+            for key in keys {
+                let key = key.to_string();
+                println!("{key}: {}",self.menus[&key].0)
             }
             println!("");
 

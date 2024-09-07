@@ -20,6 +20,7 @@ tower-http = { version = "0.5.0", features = ["fs", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 crossbeam-channel = {version = "0.5"}
+reqwest = {version = "0.12.7", features = ["json", "blocking"]}
 
 [dependencies.uuid]
 version = "1.10.0"

@@ -1,9 +1,6 @@
-use std::sync::Mutex;
-use rocksdb::{Options, DB};
 use crate::blockchain::blockchain_core::Chain;
 use crate::blockchain::blockchain_tui;
 use crate::blockchain::blockchain_rest;
-use crate::template::{self};
 use crate::utils::get_value;
 
 pub async fn blockchain_app() {
@@ -15,25 +12,11 @@ pub async fn blockchain_app() {
     let port_server    = port_server.parse::<u16>().unwrap();
 
     // blockchain initialization
-    let db_path = "amanah.db";
-    let mut db_opts = Options::default();
-    db_opts.create_if_missing(true);
-    let db = DB::open(&db_opts, db_path).unwrap();
-    let chain = std::sync::Arc::new(tokio::sync::Mutex::new(
-        Chain::new(db, port_node).await
-    ));
-    // getting the peers
-    let peers = std::sync::Arc::new(Mutex::new(Vec::new()));
-    get_peers(peers.clone()).await;
+    let chain = Chain::new(port_node, port_server).await;
+    let msg_incoming_rx = chain.msg_incoming_rx.clone();
+    let msg_outgoing_tx = chain.msg_outgoing_tx.clone();
 
-    {
-        let chain_clone = chain.clone();
-        let chain_clone = chain_clone.lock().await;
-        for peer in peers.lock().unwrap().iter() {
-            chain_clone.add_peer(peer.to_string()).await;
-            println!("peers = {}",peer);
-        }
-    }
+    let chain = std::sync::Arc::new(tokio::sync::Mutex::new(chain));
 
 
     let chain_clone = chain.clone();
@@ -41,28 +24,28 @@ pub async fn blockchain_app() {
         blockchain_rest::blockchain_app_run(chain_clone, port_server).await.unwrap();
     });
 
-    blockchain_tui::blockchain_app_run(chain.clone(), port_node).run_menu().await;
-}
-
-async fn get_peers(peers: std::sync::Arc<Mutex<Vec<String>>>) {
-
-    // adding peer
-    let peers_clone = peers.clone();
-    let mut peer_page = template::MenuBuilder::new();
-
-    peer_page.add("1", "Add peer", move || {
-        let peers_clone = peers_clone.clone();
-        async move {
-            let mut peers = peers_clone.lock().unwrap();
-            peers.push(get_value("Add peer address: "));
-            true
+    let chain_clone = chain.clone();
+    tokio::spawn(async move {
+        // let mut chain = chain_clone.lock().await;
+        let reciever = msg_incoming_rx;
+        while let Ok(msg) = reciever.recv() {
+            println!("{msg:?}");
+            if let Some(block) = &msg.block {
+                let mut chain = chain_clone.lock().await;
+                chain.add_block(block.clone()).await;
+                println!("block recieved")
+            }
+            if let Some(transaction) = &msg.transaction {
+                let mut chain = chain_clone.lock().await;
+                chain.add_transaction(transaction.clone()).await;
+                println!("transaction recieved")
+            }
+            if let Err(e) = msg_outgoing_tx.send(msg) {
+                eprintln!("Cannot transmit the message to internal reciever: {e}")
+            }
         }
     });
 
-    peer_page.add("0", "Continue" , || {
-        async {
-            false
-        }
-    });
-    peer_page.run_menu().await;
+    let chain_clone = chain.clone();
+    blockchain_tui::blockchain_app_run(chain_clone, port_node).await.run_menu().await;
 }

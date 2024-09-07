@@ -7,7 +7,7 @@ use crate::utils::get_value;
 
 use super::SharedChain;
 
-pub fn blockchain_app_run(chain: SharedChain, port: u16) -> MenuBuilder {
+pub async fn blockchain_app_run(chain: SharedChain, port: u16) -> MenuBuilder {
     let header = format!("
     Welcome to shuranetwork!!
     IP ADDRESS: {}:{}
@@ -72,8 +72,8 @@ pub fn blockchain_app_run(chain: SharedChain, port: u16) -> MenuBuilder {
         move || {
             let chain_clone = chain_clone.clone();
             async move {
-                let chain = chain_clone.lock().await;
-                chain.reveal_chain();
+                let mut chain = chain_clone.lock().await;
+                chain.reveal_chain().await;
                 true
             }
         }
@@ -84,8 +84,8 @@ pub fn blockchain_app_run(chain: SharedChain, port: u16) -> MenuBuilder {
         move || {
             let chain_clone = chain_clone.clone();
             async move {
-                let chain = chain_clone.lock().await;
-                println!("height: {}",chain.get_height());
+                let mut chain = chain_clone.lock().await;
+                println!("height: {}",chain.get_height().await);
                 true
             }
         }
@@ -128,6 +128,22 @@ pub fn blockchain_app_run(chain: SharedChain, port: u16) -> MenuBuilder {
             }
         }
     });
+
+    let chain_clone = chain.clone();
+    blockchain_page.add("10", "Show server peer addresses", {
+        let chain_clone = chain_clone.clone();
+        move || {
+            let chain_clone = chain_clone.clone();
+            async move {
+                let chain = chain_clone.clone();
+                let chain = chain.lock().await;
+                for addr in chain.node.peer_server_addr.lock().await.iter() {
+                    println!("{addr}")
+                }
+                true
+            }
+        }
+    });
     blockchain_page
 }
 
@@ -135,9 +151,9 @@ async fn show_hash_by_index(chain: Arc<Mutex<Chain>>) {
 
     let choice = get_value("Input index: ");
 
-    let chain = chain.lock().await;
+    let mut chain = chain.lock().await;
     if let Ok(choice) = choice.trim().parse::<u32>() {
-        println!("hash of index {}: {:?}",choice, chain.get_hash_by_index(choice));
+        println!("hash of index {}: {:?}",choice, chain.get_hash_by_index(choice).await);
     } else {
         println!("Invalid input");
     }
@@ -165,7 +181,7 @@ async fn new_transaction(chain: Arc<Mutex<Chain>>) {
 async fn mine_block(chain: Arc<Mutex<Chain>>) {
     println!("Generating block...");
     let mut chain = chain.lock().await;
-    let res = chain.generate_new_block();
+    let res = chain.generate_new_block().await;
     match res {
         true => println!("Block added successfully"),
         false => println!("Block failed to add")
